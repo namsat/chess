@@ -26,7 +26,8 @@
   // ----------------------------------------------------------------- memoria
   var STORE_KEY = 'coachscacchi.v1';
   function loadStats() {
-    var d = { partite: 0, vinte: 0, puzzleRisolti: [], puzzleTentati: 0, puzzleOk: 0, aperture: [], serie: 0, livello: 2 };
+    var d = { partite: 0, vinte: 0, puzzleRisolti: [], puzzleTentati: 0, puzzleOk: 0, aperture: [], serie: 0,
+      livello: 2, profilo: {}, revisioni: 0, storicoAcc: [], ultimaAcc: null, ultimoRating: null, accSomma: 0 };
     try {
       var raw = localStorage.getItem(STORE_KEY);
       if (raw) { var p = JSON.parse(raw); for (var k in d) if (p[k] !== undefined) d[k] = p[k]; }
@@ -93,11 +94,67 @@
   // ------------------------------------------------------------- scacchiera
   var boardEl = $('board'), arrowsEl = $('arrows');
 
+  var cells = {};          // casa -> {el, piece, dot, marker, coordF, coordR, stato}
+  var boardBuilt = false;
+
   function squareList() {
     var out = [];
     for (var r = 0; r < 8; r++) for (var f = 0; f < 8; f++) out.push(r * 16 + f);
-    if (S.orientation === 'b') out.reverse();
     return out;
+  }
+
+  /**
+   * Costruisce le 64 case UNA VOLTA SOLA. Tutti gli aggiornamenti successivi
+   * modificano solo gli attributi che cambiano: niente ricostruzione del DOM,
+   * quindi niente sfarfallio e niente salti della pagina a ogni mossa.
+   */
+  function buildBoard() {
+    clear(boardEl);
+    cells = {};
+    squareList().forEach(function (sq) {
+      var el = elt('div', 'sq');
+      el.dataset.sq = sq;
+      var piece = elt('span', 'piece');
+      var dot = elt('span', '');
+      var marker = elt('span', '');
+      var coordF = elt('span', 'coord f');
+      var coordR = elt('span', 'coord r');
+      el.appendChild(piece); el.appendChild(dot); el.appendChild(marker);
+      el.appendChild(coordF); el.appendChild(coordR);
+      boardEl.appendChild(el);
+      cells[sq] = { el: el, piece: piece, dot: dot, marker: marker, coordF: coordF, coordR: coordR, stato: {} };
+    });
+    boardBuilt = true;
+  }
+
+  /** Riordina le case quando si gira la scacchiera (senza ricrearle). */
+  function applyOrientation() {
+    var list = squareList();
+    var ordered = S.orientation === 'w' ? list : list.slice().reverse();
+    ordered.forEach(function (sq, i) {
+      var c = cells[sq];
+      c.el.style.order = i;
+      var f = C.fileOf(sq), r = C.rankOf(sq);
+      var edgeBottom = S.orientation === 'w' ? r === 7 : r === 0;
+      var edgeLeft = S.orientation === 'w' ? f === 0 : f === 7;
+      c.coordF.textContent = edgeBottom ? FILES[f] : '';
+      c.coordR.textContent = edgeLeft ? String(8 - r) : '';
+    });
+  }
+
+  /** Animazione breve del pezzo che si sposta (niente "scatto"). */
+  function animateMove(fromSq, toSq) {
+    var a = cells[fromSq], b = cells[toSq];
+    if (!a || !b || !b.piece.textContent) return;
+    var ra = a.el.getBoundingClientRect(), rb = b.el.getBoundingClientRect();
+    var dx = ra.left - rb.left, dy = ra.top - rb.top;
+    if (!dx && !dy) return;
+    b.piece.style.transition = 'none';
+    b.piece.style.transform = 'translate(' + dx + 'px,' + dy + 'px)';
+    b.piece.getBoundingClientRect();        // forza il ricalcolo
+    b.piece.style.transition = 'transform .16s ease-out';
+    b.piece.style.transform = '';
+    setTimeout(function () { b.piece.style.transition = ''; }, 200);
   }
 
   function render() {
@@ -115,41 +172,43 @@
       }
     }
 
-    clear(boardEl);
+    if (!boardBuilt) { buildBoard(); S.lastOrientation = null; }
+    if (S.lastOrientation !== S.orientation) { applyOrientation(); S.lastOrientation = S.orientation; }
+
     var list = squareList();
     for (var i = 0; i < list.length; i++) {
       var sq = list[i], f = C.fileOf(sq), r = C.rankOf(sq);
-      var cell = elt('div', 'sq ' + ((f + r) % 2 === 0 ? 'light' : 'dark'));
-      cell.dataset.sq = sq;
-      if (sq === lastFrom || sq === lastTo) cell.classList.add('last');
-      if (sq === S.sel) cell.classList.add('sel');
-      if (sq === checkSq) cell.classList.add('check');
-      if (hanging.indexOf(sq) >= 0) cell.classList.add('hangs');
+      var c = cells[sq], st = c.stato;
+
+      var cls = 'sq ' + ((f + r) % 2 === 0 ? 'light' : 'dark');
+      if (sq === lastFrom || sq === lastTo) cls += ' last';
+      if (sq === S.sel) cls += ' sel';
+      if (sq === checkSq) cls += ' check';
+      if (hanging.indexOf(sq) >= 0) cls += ' hangs';
+      if (st.cls !== cls) { c.el.className = cls; st.cls = cls; }
 
       var p = g.board[sq];
-      if (p) {
-        var piece = elt('span', 'piece ' + (C.colorOf(p) === C.WHITE ? 'w' : 'b'), GLYPH[C.CHAR_FROM_TYPE[C.typeOf(p)]]);
-        cell.appendChild(piece);
-      }
-      if (S.opts.legal && S.targets.indexOf(sq) >= 0) {
-        cell.appendChild(elt('span', g.board[sq] ? 'ring' : 'dot'));
-      }
-      // coordinate sui bordi
-      var edgeBottom = S.orientation === 'w' ? r === 7 : r === 0;
-      var edgeLeft = S.orientation === 'w' ? f === 0 : f === 7;
-      if (edgeBottom) cell.appendChild(elt('span', 'coord f', FILES[f]));
-      if (edgeLeft) cell.appendChild(elt('span', 'coord r', String(8 - r)));
+      var glyph = p ? GLYPH[C.CHAR_FROM_TYPE[C.typeOf(p)]] : '';
+      var pcls = p ? 'piece ' + (C.colorOf(p) === C.WHITE ? 'w' : 'b') : 'piece empty';
+      if (st.glyph !== glyph) { c.piece.textContent = glyph; st.glyph = glyph; }
+      if (st.pcls !== pcls) { c.piece.className = pcls; st.pcls = pcls; }
 
+      var dcls = (S.opts.legal && S.targets.indexOf(sq) >= 0) ? (p ? 'ring' : 'dot') : '';
+      if (st.dcls !== dcls) { c.dot.className = dcls; st.dcls = dcls; }
+
+      var mcls = '', micon = '';
       if (last && sq === lastTo && last.judge && last.byHuman) {
-        var m = elt('span', 'marker ' + last.judge.judgement.cls, last.judge.judgement.icon);
-        cell.appendChild(m);
+        mcls = 'marker ' + last.judge.judgement.cls;
+        micon = last.judge.judgement.icon;
       }
-      boardEl.appendChild(cell);
+      if (st.mcls !== mcls) { c.marker.className = mcls; st.mcls = mcls; }
+      if (st.micon !== micon) { c.marker.textContent = micon; st.micon = micon; }
     }
     drawArrows();
     renderPlayers(g);
     renderMoves();
     updateEvalbar();
+    if (S.anim) { animateMove(S.anim.from, S.anim.to); S.anim = null; }
   }
 
   function sqToXY(sq) {
@@ -347,8 +406,15 @@
   }
 
   function askPromotion(cb) {
-    var row = $('promoRow');
+    var row = $('promoRow'), modal = $('promoModal');
     clear(row);
+    modal.onclick = function (ev) {
+      if (ev.target !== modal) return;           // solo il clic fuori dal riquadro
+      modal.hidden = true;
+      S.pendingPromo = null;
+      S.sel = -1; S.targets = [];
+      render();
+    };
     ['q', 'r', 'b', 'n'].forEach(function (t) {
       var b = elt('button', 'promo-btn', GLYPH[t]);
       b.title = { q: 'Donna', r: 'Torre', b: 'Alfiere', n: 'Cavallo' }[t];
@@ -371,6 +437,7 @@
 
   // ------------------------------------------- modalità gioca / finali
   function pushMove(desc, byHuman, judge) {
+    S.anim = { from: desc.fromSq, to: desc.toSq };
     var explain = K.explainMove(S.game, desc);
     S.line.push({
       san: desc.san, fenAfter: S.game.fen(), desc: desc,
@@ -404,16 +471,18 @@
           $('warnText').innerHTML = '<strong>' + test.san + '</strong> perde circa ' +
             (loss / 100).toFixed(1) + ' punti di valutazione' + (why.length ? ': ' + why.join(', ') : '') +
             '.<br><br>Vuoi ripensarci? (puoi disattivare questo avviso nelle opzioni)';
-          $('warnModal').hidden = false;
+          var modal = $('warnModal');
+          modal.hidden = false;
           S.pendingPromo = true;   // blocca l'input finché non si decide
           var go = $('warnGo'), back = $('warnBack');
           var cleanup = function () {
-            $('warnModal').hidden = true; S.pendingPromo = null;
+            modal.hidden = true; S.pendingPromo = null; modal.onclick = null;
             go.removeEventListener('click', onGo); back.removeEventListener('click', onBack);
           };
           var onGo = function () { cleanup(); doUserMove(from, to, promo, scoreBefore, before); };
           var onBack = function () { cleanup(); S.sel = -1; S.targets = []; render(); };
           go.addEventListener('click', onGo); back.addEventListener('click', onBack);
+          modal.onclick = function (ev) { if (ev.target === modal) onBack(); };
           return;
         }
       }
@@ -438,6 +507,7 @@
   /** Nuova posizione: annulla qualunque calcolo del motore ancora in coda. */
   function resetPosition(fen) {
     S.gen++;
+    if (typeof stopReview === 'function') stopReview();
     S.thinking = false;
     S.pendingPromo = null;
     S.startFen = fen;
@@ -498,6 +568,9 @@
     if (errori.length) punti.push('Hai commesso ' + errori.length + (errori.length === 1 ? ' errore grave' : ' errori') + ': ' +
       errori.slice(0, 4).map(function (l) { return l.san; }).join(', ') + '.');
     coachSay(titolo, punti, []);
+    var rev = elt('button', 'btn primary', '📊 Rivedi la partita con l\'analisi completa');
+    rev.addEventListener('click', function () { setTab('revisione'); startReview(); });
+    $('coachBody').appendChild(rev);
     return true;
   }
 
@@ -654,12 +727,29 @@
     $(id).addEventListener('change', function () { S.opts[key] = this.checked; render(); });
   });
 
+  function mostraSetup(apri) {
+    $('setupCard').hidden = !apri;
+    $('setupMini').hidden = apri;
+    if (!apri) {
+      var lv = E.LEVELS[S.level - 1];
+      $('setupSummary').innerHTML = (S.human === 'w' ? '♔ Giochi con il <strong>bianco</strong>' : '♚ Giochi con il <strong>nero</strong>') +
+        ' · <strong>' + lv.name + '</strong> (' + lv.elo + ' Elo)';
+    }
+  }
+  $('btnSetupOpen').addEventListener('click', function () {
+    mostraSetup(true);
+    $('setupCard').scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  });
+
   function newGame() {
     S.mode = 'gioca';
     S.human = S.colorChoice === 'r' ? (Math.random() < 0.5 ? 'w' : 'b') : S.colorChoice;
     S.orientation = S.human;
     resetPosition(START);
     S.trainer = null; S.puzzle = null; S.endgame = null;
+    mostraSetup(false);
+    var pc = document.querySelector('.panel-column');
+    if (pc) pc.scrollTop = 0;
     render();
     coachSay('Buona partita!', [
       'Giochi con ' + (S.human === 'w' ? 'il bianco: muovi tu per primo.' : 'il nero: muove il computer.'),
@@ -677,9 +767,12 @@
     var items = [
       [st.partite, 'partite'],
       [st.vinte, 'vittorie'],
+      [st.ultimaAcc ? Math.round(st.ultimaAcc) + '%' : '—', 'ultima accuratezza'],
+      [st.ultimoRating || '—', 'livello stimato'],
       [st.puzzleRisolti.length, 'puzzle risolti'],
       [st.puzzleTentati ? Math.round(100 * st.puzzleOk / st.puzzleTentati) + '%' : '—', 'precisione puzzle'],
-      [st.aperture.length, 'aperture studiate']
+      [st.aperture.length, 'aperture studiate'],
+      [st.revisioni || 0, 'partite analizzate']
     ];
     items.forEach(function (it) {
       var d = elt('div', 'stat');
@@ -689,7 +782,8 @@
     });
   }
   $('btnResetStats').addEventListener('click', function () {
-    S.stats = { partite: 0, vinte: 0, puzzleRisolti: [], puzzleTentati: 0, puzzleOk: 0, aperture: [], serie: 0, livello: S.level };
+    S.stats = { partite: 0, vinte: 0, puzzleRisolti: [], puzzleTentati: 0, puzzleOk: 0, aperture: [],
+      serie: 0, livello: S.level, profilo: {}, revisioni: 0, storicoAcc: [], ultimaAcc: null, ultimoRating: null };
     saveStats(); renderStats(); renderPuzzleCounter();
   });
 
@@ -787,8 +881,9 @@
     } else {
       $('opStep').className = 'step-box';
       $('opStep').innerHTML = '<strong>Risposta dell\'avversario…</strong>';
+      var genStep = S.gen;
       setTimeout(function () {
-        if (!S.trainer || S.trainer !== t) return;
+        if (!S.trainer || S.trainer !== t || genStep !== S.gen) return;
         var d = S.game.move(step.san);
         if (!d) { $('opStep').innerHTML = 'Errore nella linea (' + step.san + ').'; return; }
         pushMove(d, false, null);
@@ -797,7 +892,7 @@
         $('opStep').innerHTML = '<strong>' + pre + step.san + '</strong> — ' + step.text;
         S.arrows = [{ from: d.fromSq, to: d.toSq, color: '#5aa9f0' }];
         render();
-        setTimeout(function () { if (S.trainer === t) trainerStep(); }, 1400);
+        setTimeout(function () { if (S.trainer === t && genStep === S.gen) trainerStep(); }, 1400);
       }, 700);
     }
   }
@@ -819,7 +914,8 @@
       $('opStep').className = 'step-box ok';
       $('opStep').innerHTML = '✅ <strong>' + d.san + '</strong> — ' + step.text;
       render();
-      setTimeout(function () { if (S.trainer === t) trainerStep(); }, 1500);
+      var genOk = S.gen;
+      setTimeout(function () { if (S.trainer === t && genOk === S.gen) trainerStep(); }, 1500);
     } else {
       // errore: cerca una spiegazione specifica
       var specific = (entry.mistakes || []).filter(function (m) {
@@ -993,8 +1089,9 @@
 
     // risposta forzata dell'avversario
     var reply = p.solution[pz.step];
+    var genReply = S.gen;
     setTimeout(function () {
-      if (!S.puzzle || S.puzzle !== pz) return;
+      if (!S.puzzle || S.puzzle !== pz || genReply !== S.gen) return;
       var rd = S.game.move(reply);
       if (!rd) return;
       pushMove(rd, false, null);
@@ -1022,9 +1119,9 @@
     if (!pz.counted) { S.stats.puzzleTentati++; pz.counted = true; saveStats(); renderStats(); }
     // riparte dalla posizione iniziale e mostra la linea passo per passo
     loadPuzzle(pz.p, true);
-    var p = pz.p, i = 0;
+    var p = pz.p, i = 0, genSol = S.gen;
     var step = function () {
-      if (!S.puzzle || S.puzzle.p !== p) return;
+      if (!S.puzzle || S.puzzle.p !== p || genSol !== S.gen) return;
       if (i >= p.solution.length) {
         var fb = $('puzzleFeedback');
         fb.className = 'step-box';
@@ -1145,6 +1242,7 @@
       S.mode = 'finali';
       render();
     }
+    if (mode === 'revisione') { updateRevMeta(); render(); }
     if (mode === 'impara') render();
   }
   $('tabs').addEventListener('click', function (e) {
@@ -1154,6 +1252,329 @@
     // su schermi stretti i pannelli stanno sotto la scacchiera: si torna in cima
     if (window.innerWidth <= 980) window.scrollTo({ top: 0, behavior: 'smooth' });
   });
+
+  // -------------------------------------------------------------- revisione
+  var RV = window.ChessReview;
+  var REV = { analysis: null, running: false, depth: 4, selected: -1 };
+
+  $('revDepthSeg').addEventListener('click', function (e) {
+    var b = e.target.closest('.seg-btn');
+    if (!b) return;
+    Array.prototype.forEach.call(this.children, function (c) { c.classList.toggle('active', c === b); });
+    REV.depth = parseInt(b.dataset.depth, 10);
+  });
+
+  function stopReview() {
+    REV.running = false;
+    REV.analysis = null;
+    REV.selected = -1;
+    $('revResults').hidden = true;
+    $('revProgressWrap').hidden = true;
+    $('revProgressText').hidden = true;
+  }
+
+  function updateRevMeta() {
+    var n = S.line.length;
+    $('revMeta').textContent = n ? Math.ceil(n / 2) + ' mosse da analizzare' : 'nessuna partita in corso';
+    $('btnAnalyze').disabled = n < 2 || REV.running;
+  }
+
+  function startReview() {
+    if (REV.running) return;
+    var sans = S.line.map(function (l) { return l.san; });
+    if (sans.length < 2) {
+      $('revProgressText').hidden = false;
+      $('revProgressText').textContent = 'Gioca almeno una mossa, poi torna qui.';
+      return;
+    }
+    var tempo = REV.depth === 5 ? 500 : (REV.depth === 3 ? 120 : 220);
+    REV.analysis = RV.createAnalysis({ startFen: S.startFen, sans: sans, depth: REV.depth, timeMs: tempo });
+    REV.running = true;
+    REV.selected = -1;
+    $('revResults').hidden = true;
+    $('revProgressWrap').hidden = false;
+    $('revProgressText').hidden = false;
+    $('btnAnalyze').disabled = true;
+    var gen = S.gen;
+
+    function tick() {
+      if (!REV.running || gen !== S.gen) { REV.running = false; updateRevMeta(); return; }
+      var t0 = Date.now(), fine = false;
+      // si lavora a blocchi di ~70ms per non bloccare l'interfaccia
+      while (!fine && Date.now() - t0 < 70) fine = REV.analysis.step();
+      var pct = Math.round(REV.analysis.progress() * 100);
+      $('revProgress').style.width = pct + '%';
+      $('revProgressText').textContent = 'Analizzo la posizione ' + REV.analysis.index + ' di ' + REV.analysis.total + '…';
+      if (fine) {
+        REV.running = false;
+        $('revProgressText').textContent = 'Analisi completata.';
+        salvaProfilo(REV.analysis);
+        renderReview();
+        updateRevMeta();
+      } else setTimeout(tick, 0);
+    }
+    setTimeout(tick, 30);
+  }
+  $('btnAnalyze').addEventListener('click', startReview);
+
+  function salvaProfilo(an) {
+    var mio = an.riepilogo[S.human];
+    if (!mio || !mio.mosse) return;
+    if (!S.stats.profilo) S.stats.profilo = {};
+    Object.keys(mio.cause || {}).forEach(function (k) {
+      S.stats.profilo[k] = (S.stats.profilo[k] || 0) + mio.cause[k];
+    });
+    S.stats.revisioni = (S.stats.revisioni || 0) + 1;
+    S.stats.accSomma = (S.stats.accSomma || 0) + mio.accuratezza;
+    S.stats.ultimaAcc = mio.accuratezza;
+    S.stats.ultimoRating = mio.rating;
+    if (!S.stats.storicoAcc) S.stats.storicoAcc = [];
+    S.stats.storicoAcc.push(Math.round(mio.accuratezza));
+    if (S.stats.storicoAcc.length > 20) S.stats.storicoAcc.shift();
+    saveStats();
+    renderStats();
+  }
+
+  function accColor(a) { return a >= 85 ? 'var(--good)' : (a >= 70 ? 'var(--accent)' : 'var(--bad)'); }
+
+  function renderReview() {
+    var an = REV.analysis;
+    if (!an || !an.done) return;
+    $('revResults').hidden = false;
+
+    // --- accuratezza dei due giocatori
+    var row = $('accRow');
+    clear(row);
+    [S.human, S.human === 'w' ? 'b' : 'w'].forEach(function (col) {
+      var r = an.riepilogo[col];
+      var card = elt('div', 'acc-card' + (col === S.human ? ' mine' : ''));
+      card.appendChild(elt('div', 'acc-name', col === S.human ? 'Tu (' + (col === 'w' ? 'bianco' : 'nero') + ')' : 'Computer'));
+      var val = elt('div', 'acc-val', r.accuratezza ? r.accuratezza.toFixed(1) + '%' : '—');
+      val.style.color = accColor(r.accuratezza);
+      card.appendChild(val);
+      var bar = elt('div', 'acc-bar');
+      var fill = elt('div', 'acc-fill');
+      fill.style.width = Math.max(2, r.accuratezza) + '%';
+      fill.style.background = accColor(r.accuratezza);
+      bar.appendChild(fill);
+      card.appendChild(bar);
+      card.appendChild(elt('div', 'acc-sub', r.rating ? 'livello espresso ≈ ' + r.rating + ' Elo' : 'troppe poche mosse'));
+      row.appendChild(card);
+    });
+
+    // --- conteggio delle classificazioni (lato umano)
+    var cc = $('classCounts');
+    clear(cc);
+    var conteggi = an.riepilogo[S.human].conteggi;
+    RV.ORDER.forEach(function (k) {
+      var n = conteggi[k] || 0;
+      if (!n) return;
+      var info = RV.CLASSES[k];
+      var chip = elt('div', 'cls-chip ' + info.cls);
+      chip.appendChild(elt('span', 'cls-icon', info.icon));
+      chip.appendChild(elt('span', 'cls-n', String(n)));
+      chip.appendChild(elt('span', 'cls-lab', info.label));
+      cc.appendChild(chip);
+    });
+
+    renderGraph(an);
+    renderMoments(an);
+    renderPlan(an);
+    renderProfile();
+    renderRevMoves(an);
+  }
+
+  function renderGraph(an) {
+    var svg = $('evalGraph');
+    clear(svg);
+    var W = 320, H = 110, mid = H / 2;
+    var n = an.moves.length;
+    if (!n) return;
+    var NS = 'http://www.w3.org/2000/svg';
+    function x(i) { return n === 1 ? W / 2 : (i / (n - 1)) * W; }
+    function y(score) {
+      var v = Math.max(-1, Math.min(1, score / 600));
+      return mid - v * (mid - 6);
+    }
+    // area bianca
+    var d = 'M0,' + mid;
+    an.moves.forEach(function (m, i) { d += ' L' + x(i).toFixed(1) + ',' + y(m.scoreBianco).toFixed(1); });
+    d += ' L' + W + ',' + mid + ' Z';
+    var area = document.createElementNS(NS, 'path');
+    area.setAttribute('d', d);
+    area.setAttribute('fill', 'rgba(248,245,239,.18)');
+    svg.appendChild(area);
+
+    var line = document.createElementNS(NS, 'polyline');
+    line.setAttribute('points', an.moves.map(function (m, i) { return x(i).toFixed(1) + ',' + y(m.scoreBianco).toFixed(1); }).join(' '));
+    line.setAttribute('fill', 'none');
+    line.setAttribute('stroke', '#e8ebf2');
+    line.setAttribute('stroke-width', '1.6');
+    svg.appendChild(line);
+
+    var zero = document.createElementNS(NS, 'line');
+    zero.setAttribute('x1', 0); zero.setAttribute('x2', W);
+    zero.setAttribute('y1', mid); zero.setAttribute('y2', mid);
+    zero.setAttribute('stroke', 'rgba(148,157,179,.5)');
+    zero.setAttribute('stroke-dasharray', '3 3');
+    svg.appendChild(zero);
+
+    an.moves.forEach(function (m, i) {
+      if (['imprecisa', 'errore', 'grave', 'mancata', 'brillante'].indexOf(m.classe) < 0) return;
+      var dot = document.createElementNS(NS, 'circle');
+      dot.setAttribute('cx', x(i)); dot.setAttribute('cy', y(m.scoreBianco));
+      dot.setAttribute('r', m.classe === 'grave' ? 4 : 3);
+      dot.setAttribute('fill', m.classe === 'grave' ? '#ef5f5f' : (m.classe === 'brillante' ? '#4ec98a' : '#f0b429'));
+      dot.setAttribute('stroke', '#11141b');
+      dot.setAttribute('stroke-width', '1');
+      svg.appendChild(dot);
+    });
+
+    svg.onclick = function (ev) {
+      var rect = svg.getBoundingClientRect();
+      var rel = (ev.clientX - rect.left) / rect.width;
+      var i = Math.round(rel * (n - 1));
+      selectReviewMove(Math.max(0, Math.min(n - 1, i)));
+    };
+  }
+
+  function renderMoments(an) {
+    var box = $('moments');
+    clear(box);
+    var miei = an.momenti.filter(function (m) { return m.colore === S.human; });
+    var suoi = an.momenti.filter(function (m) { return m.colore !== S.human; });
+    if (!miei.length) {
+      box.appendChild(elt('p', 'muted small', suoi.length
+        ? 'Nessun errore grave da parte tua in questa partita. (Il computer ne ha commessi ' + suoi.length + ': li trovi nella lista delle mosse.)'
+        : 'Nessun errore grave: partita pulita! Guarda comunque le mosse qui sotto.'));
+      return;
+    }
+    miei.forEach(function (m) {
+      var b = elt('button', 'moment ' + m.info.cls);
+      b.appendChild(elt('span', 'moment-icon', m.info.icon));
+      var txt = elt('div', 'moment-txt');
+      txt.appendChild(elt('strong', '', (m.numero) + (m.colore === 'w' ? '. ' : '… ') + m.san + ' — ' + m.info.label));
+      var sub = m.causa && RV.CAUSE_INFO[m.causa] ? RV.CAUSE_INFO[m.causa].spiega : 'Si poteva fare di meglio.';
+      if (m.migliore && m.delta > 0.5) sub += ' Meglio ' + m.migliore + '.';
+      txt.appendChild(elt('span', '', sub));
+      b.appendChild(txt);
+      b.addEventListener('click', function () { selectReviewMove(an.moves.indexOf(m)); });
+      box.appendChild(b);
+    });
+  }
+
+  function selectReviewMove(i) {
+    var an = REV.analysis;
+    if (!an || !an.moves[i]) return;
+    REV.selected = i;
+    var m = an.moves[i];
+    goTo(m.ply + 1);
+    // freccia rossa sulla mossa giocata, verde sulla migliore
+    var arrows = [];
+    var line = S.line[m.ply];
+    if (line) arrows.push({ from: line.desc.fromSq, to: line.desc.toSq, color: m.info.cls === 'blunder' ? '#ef5f5f' : '#f0b429' });
+    if (m.bestMove && (!line || m.bestMove.from !== line.desc.fromSq || m.bestMove.to !== line.desc.toSq)) {
+      arrows.push({ from: m.bestMove.from, to: m.bestMove.to, color: '#4ec98a' });
+    }
+    S.arrows = arrows;
+    drawArrows();
+
+    var det = $('momentDetail');
+    det.hidden = false;
+    det.className = 'step-box ' + (m.info.peso === 'male' ? 'err' : 'ok');
+    var html = '<strong>' + m.numero + (m.colore === 'w' ? '. ' : '… ') + m.san + '</strong> — ' +
+      m.info.icon + ' ' + m.info.label + ' (' + (m.delta >= 0.1 ? '−' + m.delta.toFixed(1) + '% di probabilità di vittoria' : 'nessuna perdita') + ')';
+    if (m.libro) html += '<br>📖 Teoria: ' + m.libro + '.';
+    if (m.migliore && m.delta > 0.5) {
+      html += '<br>✅ Meglio <strong>' + m.migliore + '</strong>' +
+        (m.variante.length > 1 ? ' (seguito da ' + m.variante.slice(1).join(' ') + ')' : '') + '.';
+    }
+    if (m.causa && RV.CAUSE_INFO[m.causa]) {
+      html += '<br>🔎 <em>' + RV.CAUSE_INFO[m.causa].spiega + '</em> ' + RV.CAUSE_INFO[m.causa].consiglio;
+    }
+    html += '<br><span class="muted small">Freccia gialla/rossa = la tua mossa, verde = la migliore.</span>';
+    det.innerHTML = html;
+    renderRevMoves(an);
+  }
+
+  function renderPlan(an) {
+    var box = $('trainingPlan');
+    clear(box);
+    var cause = an.riepilogo[S.human].cause || {};
+    var plan = RV.trainingPlan(cause, 3);
+    if (!plan.length) {
+      box.appendChild(elt('p', 'muted small', 'Nessun errore ricorrente in questa partita: alza il livello dell\'avversario per allenarti di più.'));
+      return;
+    }
+    plan.forEach(function (p, i) {
+      var card = elt('div', 'plan-item');
+      var head = elt('div', 'plan-head');
+      head.appendChild(elt('span', 'plan-num', String(i + 1)));
+      head.appendChild(elt('strong', '', p.info.titolo + ' · ' + p.n + (p.n === 1 ? ' volta' : ' volte')));
+      card.appendChild(head);
+      card.appendChild(elt('p', '', p.info.consiglio));
+      if (p.info.tema) {
+        var b = elt('button', 'btn tiny accent', '🧩 Allena "' + PZ.TEMI[p.info.tema].nome + '"');
+        b.addEventListener('click', function () {
+          S.puzzleFilter = p.info.tema;
+          renderThemeChips();
+          setTab('puzzle');
+          nextPuzzle(true);
+        });
+        card.appendChild(b);
+      } else if (p.info.apertura) {
+        var b2 = elt('button', 'btn tiny accent', '📖 Ripassa i principi di apertura');
+        b2.addEventListener('click', function () { setTab('impara'); });
+        card.appendChild(b2);
+      }
+      box.appendChild(card);
+    });
+  }
+
+  function renderProfile() {
+    var box = $('profileBox');
+    clear(box);
+    var prof = S.stats.profilo || {};
+    var tot = Object.keys(prof).reduce(function (a, k) { return a + prof[k]; }, 0);
+    $('profileMeta').textContent = (S.stats.revisioni || 0) + (S.stats.revisioni === 1 ? ' partita analizzata' : ' partite analizzate');
+    if (!tot) {
+      box.appendChild(elt('p', 'muted small', 'Analizza qualche partita e qui comparirà la classifica dei tuoi errori ricorrenti.'));
+      return;
+    }
+    var items = RV.trainingPlan(prof, 5);
+    items.forEach(function (p) {
+      var r = elt('div', 'prof-row');
+      r.appendChild(elt('span', 'prof-lab', p.info.titolo));
+      var bar = elt('div', 'prof-bar');
+      var fill = elt('div', 'prof-fill');
+      fill.style.width = Math.round(100 * p.n / items[0].n) + '%';
+      bar.appendChild(fill);
+      r.appendChild(bar);
+      r.appendChild(elt('span', 'prof-n', String(p.n)));
+      box.appendChild(r);
+    });
+    if (S.stats.storicoAcc && S.stats.storicoAcc.length >= 2) {
+      var h = S.stats.storicoAcc;
+      var media = Math.round(h.reduce(function (a, b) { return a + b; }, 0) / h.length);
+      var trend = h[h.length - 1] - h[0];
+      box.appendChild(elt('p', 'muted small', 'Accuratezza media delle ultime ' + h.length + ' partite: ' + media + '%' +
+        (Math.abs(trend) >= 2 ? (trend > 0 ? ' (in miglioramento, +' + trend + ')' : ' (in calo, ' + trend + ')') : '')));
+    }
+  }
+
+  function renderRevMoves(an) {
+    var box = $('revMoves');
+    clear(box);
+    an.moves.forEach(function (m, i) {
+      var b = elt('button', 'rev-mv ' + m.info.cls + (REV.selected === i ? ' sel' : ''));
+      b.appendChild(elt('span', 'rev-num', m.colore === 'w' ? m.numero + '.' : ''));
+      b.appendChild(elt('span', 'rev-san', m.san));
+      b.appendChild(elt('span', 'rev-ico', m.info.icon));
+      b.title = m.info.label + (m.migliore && m.delta > 0.5 ? ' — meglio ' + m.migliore : '');
+      b.addEventListener('click', function () { selectReviewMove(i); });
+      box.appendChild(b);
+    });
+  }
 
   // --------------------------------------------- aggancio per test e debug
   window.CoachApp = {

@@ -22,6 +22,7 @@
   <nav class="tabs" id="tabs">
     <button class="tab active" data-mode="gioca">Gioca</button>
     <button class="tab" data-mode="aperture">Aperture</button>
+    <button class="tab" data-mode="revisione">Revisione</button>
     <button class="tab" data-mode="puzzle">Puzzle</button>
     <button class="tab" data-mode="finali">Finali</button>
     <button class="tab" data-mode="impara">Impara</button>
@@ -81,6 +82,13 @@
 
     <!-- --------------------------------- GIOCA --------------------------------- -->
     <div class="panel active" id="panel-gioca">
+      <div class="card mini-setup" id="setupMini" hidden>
+        <div class="mini-row">
+          <span id="setupSummary">—</span>
+          <button class="btn tiny" id="btnSetupOpen">⚙ Nuova partita</button>
+        </div>
+      </div>
+
       <div class="card setup-card" id="setupCard">
         <h2>Nuova partita</h2>
         <div class="field">
@@ -163,6 +171,59 @@
         </div>
         <div class="op-done" id="opDone" hidden></div>
         <div class="movelist mini" id="opMoves"></div>
+      </div>
+    </div>
+
+    <!-- ------------------------------- REVISIONE -------------------------------- -->
+    <div class="panel" id="panel-revisione">
+      <div class="card" id="revIntro">
+        <div class="card-head"><h2>Revisione della partita</h2><span class="muted small" id="revMeta"></span></div>
+        <p class="muted small">Analizzo ogni singola mossa, calcolo la tua accuratezza, stimo il livello di gioco
+        e ti dico <strong>perché</strong> hai sbagliato, con un piano di allenamento costruito sui tuoi errori.</p>
+        <div class="seg small" id="revDepthSeg">
+          <button class="seg-btn" data-depth="3">Veloce</button>
+          <button class="seg-btn active" data-depth="4">Normale</button>
+          <button class="seg-btn" data-depth="5">Accurata</button>
+        </div>
+        <button class="btn primary big" id="btnAnalyze">📊 Analizza la partita</button>
+        <div class="progress rev-progress" id="revProgressWrap" hidden><div class="progress-fill" id="revProgress"></div></div>
+        <p class="muted small" id="revProgressText" hidden></p>
+      </div>
+
+      <div id="revResults" hidden>
+        <div class="card">
+          <div class="card-head"><h2>Accuratezza</h2><span class="muted small">stile chess.com</span></div>
+          <div class="acc-row" id="accRow"></div>
+          <div class="class-counts" id="classCounts"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2>Andamento della partita</h2><span class="muted small">clicca per rivedere</span></div>
+          <div class="graph-wrap"><svg class="evalgraph" id="evalGraph" viewBox="0 0 320 110" preserveAspectRatio="none"></svg></div>
+          <p class="muted small" id="graphHint">Sopra la linea = vantaggio del bianco. I pallini sono gli errori.</p>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2>Momenti chiave</h2></div>
+          <div class="moments" id="moments"></div>
+          <div class="step-box" id="momentDetail" hidden></div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2>Cosa allenare adesso</h2><span class="muted small">su misura per te</span></div>
+          <div class="plan" id="trainingPlan"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2>Il tuo profilo</h2><span class="muted small" id="profileMeta"></span></div>
+          <p class="muted small">Si aggiorna a ogni partita analizzata: più partite riviste, più i consigli diventano precisi.</p>
+          <div class="profile" id="profileBox"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2>Tutte le mosse</h2></div>
+          <div class="rev-moves" id="revMoves"></div>
+        </div>
       </div>
     </div>
 
@@ -287,6 +348,7 @@
 <script src="js/coach.js"></script>
 <script src="js/openings.js"></script>
 <script src="js/puzzles.js"></script>
+<script src="js/review.js"></script>
 <script src="js/ui.js"></script>
 </body>
 </html>

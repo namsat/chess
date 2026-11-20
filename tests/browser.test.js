@@ -31,7 +31,8 @@ function check(label, cond, extra) {
 
   // ---------------------------------------------------------- caricamento
   check('64 case disegnate', (await page.$$('.sq')).length === 64);
-  check('32 pezzi nella posizione iniziale', (await page.$$('.piece')).length === 32);
+  check('32 pezzi nella posizione iniziale', (await page.$$('.piece:not(.empty)')).length === 32,
+    (await page.$$('.piece:not(.empty)')).length);
   check('5 livelli elencati', (await page.$$('.level')).length === 5);
   check('aperture elencate', (await page.$$('#openingList .op-item')).length >= 8);
   check('trappole elencate', (await page.$$('#trapList .op-item')).length >= 4);
@@ -81,7 +82,8 @@ function check(label, cond, extra) {
   // navigazione avanti/indietro
   await page.click('#navPrev'); await new Promise(r => setTimeout(r, 200));
   await page.click('#navStart'); await new Promise(r => setTimeout(r, 200));
-  check('torna alla posizione iniziale', (await page.$$('.piece')).length === 32);
+  check('torna alla posizione iniziale', (await page.$$('.piece:not(.empty)')).length === 32,
+    (await page.$$('.piece:not(.empty)')).length);
   await page.click('#navEnd'); await new Promise(r => setTimeout(r, 200));
   const beforeUndo = (await moves()).length;
   await page.click('#btnUndo'); await new Promise(r => setTimeout(r, 300));
@@ -180,6 +182,52 @@ function check(label, cond, extra) {
   await new Promise(r => setTimeout(r, 600));
   check('filtro per tema applicato', /Matto in 1/.test(await text('#puzzleTheme')), await text('#puzzleTheme'));
 
+  // ---------------------------------------------------------- revisione
+  await tab('gioca');
+  await page.evaluate(() => window.CoachApp.nuovaPartita());
+  await new Promise(r => setTimeout(r, 300));
+  const giocaMossa = async (f, t) => {
+    await page.click(`[data-sq="${sq(f)}"]`);
+    await new Promise(r => setTimeout(r, 80));
+    await page.click(`[data-sq="${sq(t)}"]`);
+    await new Promise(r => setTimeout(r, 250));
+    // l'avviso anti-svista puo comparire: qui vogliamo giocare comunque
+    if (!(await page.$eval('#warnModal', e => e.hidden))) {
+      await page.click('#warnGo');
+      await new Promise(r => setTimeout(r, 200));
+    }
+    await page.waitForFunction('!window.CoachApp.stato.thinking', { timeout: 25000 });
+    await new Promise(r => setTimeout(r, 150));
+  };
+  await giocaMossa('e2', 'e4');
+  await giocaMossa('d1', 'h5');
+  await giocaMossa('f1', 'c4');
+  await tab('revisione');
+  const diag = await page.evaluate(() => ({
+    tabAttiva: document.querySelector('.tab.active') && document.querySelector('.tab.active').dataset.mode,
+    pannelloAttivo: document.querySelector('.panel.active') && document.querySelector('.panel.active').id,
+    linea: window.CoachApp.stato.line.length,
+    meta: document.getElementById('revMeta').textContent,
+    btn: document.getElementById('btnAnalyze').disabled
+  }));
+  check('la revisione conosce la partita in corso', /mosse da analizzare/.test(await text('#revMeta')), JSON.stringify(diag));
+  await page.click('#btnAnalyze');
+  await page.waitForFunction('!document.getElementById("revResults").hidden', { timeout: 180000 });
+  const accCards = await page.$$eval('.acc-card', els => els.map(e => e.textContent));
+  check('due schede di accuratezza', accCards.length === 2 && /%/.test(accCards[0]), accCards.join(' | '));
+  check('classificazione delle mosse mostrata', (await page.$$('.cls-chip')).length >= 2);
+  check('grafico della valutazione disegnato', (await page.$$('#evalGraph polyline')).length === 1);
+  check('tutte le mosse elencate nella revisione', (await page.$$('.rev-mv')).length >= 5);
+  check('piano di allenamento personalizzato', (await page.$$('.plan-item')).length >= 1);
+  check('profilo degli errori aggiornato', /\w/.test(await text('#profileBox')));
+  await page.click('.rev-mv:nth-child(3)');
+  await new Promise(r => setTimeout(r, 600));
+  const det = await text('#momentDetail');
+  check('il dettaglio della mossa spiega cosa era meglio', /Meglio|Teoria|Imprecisione|Migliore|Errore|Eccellente|Buona/.test(det), det.slice(0, 120));
+  check('frecce mossa giocata + mossa migliore', (await page.$$('#arrows line')).length >= 1);
+  const accNum = parseFloat((await page.$eval('.acc-card.mine .acc-val', e => e.textContent)) || '0');
+  check('accuratezza in percentuale sensata', accNum > 0 && accNum <= 100, accNum);
+
   // ------------------------------------------------------------- finali
   await tab('finali');
   check('esercizi di finale elencati', (await page.$$('#endgameList .op-item')).length >= 4);
@@ -194,6 +242,25 @@ function check(label, cond, extra) {
   check('8 principi di apertura', (await page.$$('#principlesBox .principle')).length === 8);
   check('valori dei pezzi', (await page.$$('#valuesBox .value-item')).length === 6);
   check('temi tattici spiegati', (await page.$$('#themesBox .theme')).length >= 8);
+
+  // ------------------------------------------- stabilita: niente sfarfallio
+  await tab('gioca');
+  await page.evaluate(() => window.CoachApp.nuovaPartita());
+  await new Promise(r => setTimeout(r, 300));
+  await page.evaluate(() => {
+    const c = document.querySelector('.sq');
+    window.__primaCasa = c;
+    window.__contoCase = document.querySelectorAll('.sq').length;
+    window.__altezzaPagina = document.body.scrollHeight;
+  });
+  await giocaMossa('e2', 'e4');
+  const stabile = await page.evaluate(() => ({
+    stessoNodo: window.__primaCasa === document.querySelector('.sq'),
+    stessoConto: window.__contoCase === document.querySelectorAll('.sq').length,
+    deltaAltezza: Math.abs(window.__altezzaPagina - document.body.scrollHeight)
+  }));
+  check('la scacchiera non viene ricostruita a ogni mossa', stabile.stessoNodo && stabile.stessoConto, JSON.stringify(stabile));
+  check('la pagina non cambia altezza quando muovi (' + stabile.deltaAltezza + 'px)', stabile.deltaAltezza <= 8, JSON.stringify(stabile));
 
   // ------------------------------------------------- schermate e responsive
   await tab('gioca');

@@ -10,6 +10,25 @@ Non è solo un avversario: è un **coach che spiega ogni mossa passo per passo**
 
 ## Cosa puoi fare
 
+**📊 Revisione completa della partita** (stile chess.com)
+- **Accuratezza** in percentuale per entrambi i giocatori, calcolata sulla probabilità di vittoria
+  mossa per mossa (stessa formula usata da chess.com e Lichess).
+- **Livello espresso stimato** in Elo per quella partita.
+- Ogni mossa classificata: Brillante `!!`, Mossa decisiva `!`, Migliore `★`, Teoria `📖`,
+  Eccellente, Buona, Imprecisione `?!`, Occasione mancata `✗`, Errore `?`, Errore grave `??`.
+- **Grafico dell'andamento** cliccabile: vedi dove la partita è girata.
+- **Momenti chiave**: i tuoi errori più costosi, con la mossa giusta e le frecce sulla scacchiera
+  (gialla = quello che hai giocato, verde = quello che andava giocato).
+- **Diagnosi della causa**, non solo "hai sbagliato": pezzo lasciato indifeso, minaccia ignorata,
+  difensore spostato, cattura che perde materiale, forchetta subita, re esposto, matto non visto,
+  arrocco rimandato, donna fuori troppo presto, tempi persi.
+- **Piano di allenamento personalizzato**: i tuoi 3 difetti ricorrenti con il pulsante che apre
+  direttamente i puzzle di quel tema.
+- **Profilo che cresce**: gli errori si accumulano partita dopo partita, così i consigli diventano
+  sempre più mirati, con l'andamento della tua accuratezza nel tempo.
+
+![Revisione](docs/screenshot-revisione.png)
+
 **🎮 Gioca con il coach**
 - 5 livelli calibrati, da ~400 a ~1500 Elo (il livello 2 corrisponde a circa 600 Elo).
 - Dopo ogni mossa il coach spiega in italiano cosa è successo: sviluppo, centro, minacce,
@@ -51,6 +70,7 @@ chiamata di rete, nessun dato che esce dal browser. Funziona anche offline.
 | `js/coach.js` | Traduce la posizione in italiano: perché una mossa è buona, cosa minaccia l'avversario, aiuti progressivi |
 | `js/openings.js` | Repertorio di aperture, trappole, finali e principi |
 | `js/puzzles.js` | Puzzle tattici con tema, aiuti e lezione |
+| `js/review.js` | Revisione partita: win%, accuratezza, classificazione, rating stimato, diagnosi delle cause, piano di allenamento |
 | `js/ui.js` | Scacchiera, pannelli, trainer, statistiche |
 
 ## Test
@@ -63,12 +83,25 @@ node tests/engine.test.js    # tattica, matti, valutazione, velocità dei livell
 node tests/content.test.js   # tutte le linee di apertura e i finali sono legali
 node tests/puzzles.test.js   # ogni puzzle è risolvibile e la soluzione è la mossa migliore
 node tests/coach.test.js     # le spiegazioni sono sensate e non vanno mai in errore
+node tests/review.test.js    # accuratezza, classificazione, rating e diagnosi degli errori
 node tests/browser.test.js   # test end-to-end in Chrome headless (richiede puppeteer)
 ```
 
 `perft` è il test standard per i motori di scacchi: conta tutte le posizioni raggiungibili e
 le confronta con i valori noti (197.281 posizioni a profondità 4 dalla posizione iniziale,
 97.862 dalla "kiwipete", ecc.). Tutti i valori corrispondono.
+
+## Note tecniche
+
+- La scacchiera viene costruita una sola volta: ogni mossa aggiorna solo gli attributi che
+  cambiano, con una breve animazione dello spostamento. Niente ricostruzione del DOM, quindi
+  niente sfarfallio e niente salti della pagina (verificato dai test).
+- Su PC la scacchiera si dimensiona sull'altezza della finestra e resta ferma mentre scorrono i
+  pannelli; i pezzi sono proporzionali alla scacchiera (container query), non alla finestra.
+- Su telefono le schede stanno su una riga scorrevole e i comandi sono grandi abbastanza da
+  toccarli: nessuno scorrimento orizzontale a nessuna larghezza.
+- L'analisi della partita gira a blocchi di ~70 ms con una barra di avanzamento, così
+  l'interfaccia resta sempre reattiva.
 
 ## Uso locale
 
